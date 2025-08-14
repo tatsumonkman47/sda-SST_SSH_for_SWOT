@@ -3,6 +3,7 @@ r"""Score modules"""
 import math
 import torch
 import torch.nn as nn
+import wandb 
 
 from torch import Size, Tensor
 from tqdm import tqdm
@@ -211,12 +212,9 @@ class VPSDE(nn.Module):
 
     def forward(self, x: Tensor, t: Tensor, train: bool = False) -> Tensor:
         r"""Samples from the perturbation kernel :math:`p(x(t) | x)`."""
-
         t = t.reshape(t.shape + (1,) * len(self.shape))
-
         eps = torch.randn_like(x)
         x = self.mu(t) * x + self.sigma(t) * eps
-
         if train:
             return x, eps
         else:
@@ -231,7 +229,6 @@ class VPSDE(nn.Module):
         tau: float = 1.0,
     ) -> Tensor:
         r"""Samples from :math:`p(x(0))`.
-
         Arguments:
             shape: The batch shape.
             c: The optional context.
@@ -239,37 +236,37 @@ class VPSDE(nn.Module):
             corrections: The number of Langevin corrections per time steps.
             tau: The amplitude of Langevin steps.
         """
-
         x = torch.randn(shape + self.shape).to(self.device)
         x = x.reshape(-1, *self.shape)
-
         time = torch.linspace(1, 0, steps + 1).to(self.device)
         dt = 1 / steps
-
         with torch.no_grad():
             for t in tqdm(time[:-1], ncols=88):
                 # Predictor
                 r = self.mu(t - dt) / self.mu(t)
                 x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * self.eps(x, t, c)
-
                 # Corrector
                 for _ in range(corrections):
                     z = torch.randn_like(x)
                     eps = self.eps(x, t - dt, c)
                     delta = tau / eps.square().mean(dim=self.dims, keepdim=True)
-
                     x = x - (delta * eps + torch.sqrt(2 * delta) * z) * self.sigma(t - dt)
-
         return x.reshape(shape + self.shape)
 
     def loss(self, x: Tensor, c: Tensor = None, w: Tensor = None) -> Tensor:
         r"""Returns the denoising loss."""
-
         t = torch.rand(x.shape[0], dtype=x.dtype, device=x.device)
         x, eps = self.forward(x, t, train=True)
-
         err = (self.eps(x, t, c) - eps).square()
-
+        with torch.no_grad():
+            cos = torch.nn.functional.cosine_similarity(
+                    self.eps(x,t,c).flatten(1), eps.flatten(1), dim=1
+                    ).mean()
+            wandb.log({
+                "debug/eps_cosine": cos.item(),           # however you name it
+                "debug/eps_true/std": eps.std().item(),
+                "debug/eps_pred/std": self.eps(x,t,c).std().item(),
+            }, commit=False)
         if w is None:
             return err.mean()
         else:

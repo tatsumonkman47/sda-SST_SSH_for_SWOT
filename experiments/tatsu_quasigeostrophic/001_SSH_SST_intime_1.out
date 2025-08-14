@@ -1,0 +1,6 @@
+x.shape torch.Size([60, 9, 2, 128, 128])
+kwargs.keys() dict_keys(['c'])
+kwargs['c'].shape torch.Size([60, 4, 128, 128])
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33msparkling-grass-10[0m at: [34mhttps://wandb.ai/tm3076-new-york-university/sda-quasigeostrophic/runs/jls55urp[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20250808_173814-jls55urp/logs[0m
