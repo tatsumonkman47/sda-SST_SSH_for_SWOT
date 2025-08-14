@@ -13,7 +13,17 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 from pathlib import Path as SysPath  # avoid shadowing Hydra's `Path`
 import sys
-sys.path.append('/home/tm3076/scratch/project/SWOT-inpainting-DL/src')
+import os
+import sys
+if os.path.exists('/home/tm3076/projects/NYU_SWOT_project/'):
+    sys.path.append('/home/tm3076/projects/NYU_SWOT_project/Inpainting_Pytorch_gen/SWOT-inpainting-DL/src')
+    sys.path.append('/home/tm3076/projects/NYU_SWOT_project/SWOT-data-analysis/src')
+elif os.path.exists('/home.ufs/tm3076/swot_SUM03/SWOT_project/'):
+    sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-inpainting-DL/src')
+    sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-data-analysis/src')
+elif os.path.exists('/scratch/tm3076/project/'):
+    sys.path.append('/scratch/tm3076/project/SWOT-inpainting-DL/src')
+    sys.path.append('/scratch/tm3076/project/SWOT-data-analysis/src')
 import claude_data_loaders
 
 wandb.login()
