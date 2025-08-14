@@ -18,9 +18,9 @@ from sda.utils import load_config, TrajectoryDataset
 
 import torch.nn as nn
 ACTIVATIONS = {
-    'ReLu': nn.ReLU,
-    'SiLu': nn.SiLU,
-    'GeLu': nn.GELU,
+    'relu': nn.ReLU,
+    'silu': nn.SiLU,
+    'gelu': nn.GELU,
     # Add more as needed
 }
 
