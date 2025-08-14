@@ -58,9 +58,11 @@ def llc4320_dataloaders(cfg: DictConfig):
     train_len = int(0.7 * len(full_dataset))
     val_len = int(0.2 * len(full_dataset))
     test_len = len(full_dataset) - train_len - val_len
-    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_len, val_len, test_len])
+
+    rng_generator = torch.Generator().manual_seed(cfg.get("split_seed", 42))
+    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_len, val_len, test_len], generator=rng_generator)
     
-    return train_dataset, val_dataset
+    return train_dataset, val_dataset, test_dataset
     
 
     
@@ -86,7 +88,7 @@ def train(cfg: DictConfig):
     sde = VPSDE(score, shape=tuple(cfg.model.input_shape)).cuda()
 
     # Data
-    train_dataset, val_dataset = llc4320_dataloaders(cfg)
+    train_dataset, val_dataset, test_dataset = llc4320_dataloaders(cfg)
 
     # Training loop generator
     generator = loop(
@@ -107,8 +109,12 @@ def train(cfg: DictConfig):
     # Save checkpoint
     torch.save(score.state_dict(), runpath / f'state.pth')
 
+
+    trainloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True,
+                             num_workers=num_workers, persistent_workers=True)
+
     # Sampling
-    c = next(iter(train_loader))[1]["c"].cuda()
+    c = next(iter(trainloader))[1]["c"].cuda()
     x = sde.sample((2,), c=c, steps=cfg.sampling.steps).cpu()
     q = x[:, ::4, 0]
 
