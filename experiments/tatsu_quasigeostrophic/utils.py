@@ -34,7 +34,7 @@ PATH.mkdir(parents=True, exist_ok=True)
 
 
 class RandomCropDataset(TrajectoryDataset):
-    def __init__(self, file: Path, crop: int = None, pad: int = None, **kwargs):
+    def __init__(self, file: Path, crop: Optional[int] = None, pad: Optional[int] = None, **kwargs):
         super().__init__(file, **kwargs)
 
         *_, H, W = self.data.shape
