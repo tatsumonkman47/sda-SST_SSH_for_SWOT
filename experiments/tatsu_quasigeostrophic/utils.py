@@ -14,7 +14,7 @@ from typing import *
 
 from sda.nn import ResidualBlock, Checkpoint
 from sda.score import ScoreUNet
-from sda.utils import load_config
+from sda.utils import load_config, TrajectoryDataset
 
 import torch.nn as nn
 ACTIVATIONS = {

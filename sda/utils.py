@@ -11,6 +11,7 @@ import wandb
 from pathlib import Path
 from torch import Tensor
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import trange
 from typing import *
 
@@ -131,14 +132,20 @@ def loop(
     lr_rampup_kimg: float = 100.0,  # warmup over 10k images
     lr_decay: float = 0.999,       # exponential step-decay base
     images_per_item: int = 1,      # set to L if you want to count frames as images
+    local_rank: int = 0,  # NEW: pass local_rank from main
+    world_size: int = 1,  # NEW: pass world_size from main
     **absorb,
 ) -> Iterator:
+    # Distributed samplers
+    train_sampler = DistributedSampler(trainset, num_replicas=world_size, rank=local_rank, shuffle=True)
+    valid_sampler = DistributedSampler(validset, num_replicas=world_size, rank=local_rank, shuffle=False)
 
-    # Data
-    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True,
+    trainloader = DataLoader(trainset, batch_size=batch_size, sampler=train_sampler,
                              num_workers=num_workers, persistent_workers=True)
-    validloader = DataLoader(validset, batch_size=batch_size, shuffle=True,
+    validloader = DataLoader(validset, batch_size=batch_size, sampler=valid_sampler,
                              num_workers=num_workers, persistent_workers=True)
+    # Wrap model with DDP
+    sde = torch.nn.parallel.DistributedDataParallel(sde, device_ids=[local_rank])
 
     # Optimizer
     if optimizer == 'AdamW':
@@ -170,6 +177,7 @@ def loop(
     global_step = 0
 
     for epoch in (bar := trange(epochs, ncols=88)):
+        train_sampler.set_epoch(epoch)  # Shuffle each epoch
         losses_train, losses_valid = [], []
 
         # ---- Train ----
@@ -195,16 +203,18 @@ def loop(
                 for g in optimizer.param_groups: # type: ignore
                     g["lr"] = float(new_lr)
                 # Log LR by images seen (nice x-axis for W&B)
-                wandb.log({"lr": new_lr, "images_seen": cur_nimg, "step": global_step}, step=global_step)
+                if local_rank == 0:
+                    wandb.log({"lr": new_lr, "images_seen": cur_nimg, "step": global_step}, step=global_step)
 
             # LOGGING (sanity stats once)
             if b_idx == 0 and epoch == 0:
-                wandb.log({
-                    "debug/x/mean_per_channel": x.detach().mean(dim=(0,2,3)).cpu().numpy(),
-                    "debug/x/std_per_channel":  x.detach().std (dim=(0,2,3)).cpu().numpy(),
-                    "debug/c/mean":             kwargs["c"].detach().mean().item(),
-                    "debug/c/std":              kwargs["c"].detach().std().item(),
-                }, commit=False)
+                if local_rank == 0:
+                    wandb.log({
+                        "debug/x/mean_per_channel": x.detach().mean(dim=(0,2,3)).cpu().numpy(),
+                        "debug/x/std_per_channel":  x.detach().std (dim=(0,2,3)).cpu().numpy(),
+                        "debug/c/mean":             kwargs["c"].detach().mean().item(),
+                        "debug/c/std":              kwargs["c"].detach().std().item(),
+                    }, commit=False)
 
             l = sde.loss(x, **kwargs)
             l.backward()
@@ -217,16 +227,17 @@ def loop(
             losses_train.append(l.detach())
             # Batch-wise logging (train)
             if (b_idx % log_every_n) == 0:
-                wandb.log(
-                    {
-                        "batch_loss/train": l.item(),
-                        "lr": optimizer.param_groups[0]["lr"], # type: ignore
-                        "epoch": epoch,
-                        "batch_idx": b_idx,
-                        "step": global_step,
-                    },
-                    step=global_step,
-                )
+                if local_rank == 0:
+                    wandb.log(
+                        {
+                            "batch_loss/train": l.item(),
+                            "lr": optimizer.param_groups[0]["lr"], # type: ignore
+                            "epoch": epoch,
+                            "batch_idx": b_idx,
+                            "step": global_step,
+                        },
+                        step=global_step,
+                    )
             global_step += 1
 
         # ---- Valid ----
@@ -239,44 +250,46 @@ def loop(
                 losses_valid.append(lv)
 
                 if (vb_idx % log_every_n) == 0:
-                    wandb.log(
-                        {
-                            "batch_loss/valid": lv.item(),
-                            "epoch": epoch,
-                            "batch_idx": vb_idx,
-                            "step": global_step,
-                        },
-                        step=global_step,
-                    )
+                    if local_rank == 0:
+                        wandb.log(
+                            {
+                                "batch_loss/valid": lv.item(),
+                                "epoch": epoch,
+                                "batch_idx": vb_idx,
+                                "step": global_step,
+                            },
+                            step=global_step,
+                        )
 
         # ---- Epoch stats ----
         loss_train = torch.stack(losses_train).mean().item()
         loss_valid = torch.stack(losses_valid).mean().item()
         lr_now = optimizer.param_groups[0]['lr']
-
-        wandb.log(
-            {
-                "loss_train/epoch": loss_train,
-                "loss_valid/epoch": loss_valid,
-                "lr/epoch": lr_now,
-                "epoch": epoch,
-                "step": global_step,
-            },
-            step=global_step,
-        )
+        if local_rank == 0:
+            wandb.log(
+                {
+                    "loss_train/epoch": loss_train,
+                    "loss_valid/epoch": loss_valid,
+                    "lr/epoch": lr_now,
+                    "epoch": epoch,
+                    "step": global_step,
+                },
+                step=global_step,
+            )
         bar.set_description(f"Epoch {epoch+1}/{epochs} | Train Loss: {loss_train:.4f} | Valid Loss: {loss_valid:.4f} | LR: {lr_now:.6f}")
         # ---- Checkpointing ----
         if (epoch + 1) % 10 == 0:  # Save every 10 epochs (adjust as needed)
-            checkpoint = {
-                "epoch": epoch + 1,
-                "model_state_dict": sde.score.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(), # type: ignore
-                "global_step": global_step,
-                "loss_train": loss_train,
-                "loss_valid": loss_valid,
-                "lr": lr_now,
-            }
-            torch.save(checkpoint, f"checkpoint_epoch_{epoch+1}.pth")
+            if local_rank == 0:
+                checkpoint = {
+                    "epoch": epoch + 1,
+                    "model_state_dict": sde.score.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(), # type: ignore
+                    "global_step": global_step,
+                    "loss_train": loss_train,
+                    "loss_valid": loss_valid,
+                    "lr": lr_now,
+                }
+                torch.save(checkpoint, f"checkpoint_epoch_{epoch+1}.pth")
 
         yield loss_train, loss_valid, lr_now
 

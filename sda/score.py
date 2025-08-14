@@ -258,15 +258,6 @@ class VPSDE(nn.Module):
         t = torch.rand(x.shape[0], dtype=x.dtype, device=x.device)
         x, eps = self.forward(x, t, train=True)
         err = (self.eps(x, t, c) - eps).square()
-        with torch.no_grad():
-            cos = torch.nn.functional.cosine_similarity(
-                    self.eps(x,t,c).flatten(1), eps.flatten(1), dim=1
-                    ).mean()
-            wandb.log({
-                "debug/eps_cosine": cos.item(),           # however you name it
-                "debug/eps_true/std": eps.std().item(),
-                "debug/eps_pred/std": self.eps(x,t,c).std().item(),
-            }, commit=False)
         if w is None:
             return err.mean()
         else:
