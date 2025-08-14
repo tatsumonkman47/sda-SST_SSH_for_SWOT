@@ -113,131 +113,7 @@ def grad_global_norm(model):
             total += p.grad.detach().pow(2).sum().item()
     return total ** 0.5    
 
-"""
-def loop(
-    sde: VPSDE,
-    trainset: Dataset,
-    validset: Dataset,
-    epochs: int = 256,
-    batch_size: int = 64,
-    optimizer: str = 'AdamW',
-    learning_rate: float = 1e-3,
-    weight_decay: float = 1e-3,
-    scheduler: float = 'linear',
-    device: str = 'cpu',
-    num_workers: int = 20,
-    log_every_n: int = 1,  # NEW: throttle batch logging (every n batches)
-    **absorb,
-) -> Iterator:
-    # Data
-    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True)
-    validloader = DataLoader(validset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True)
 
-    # Optimizer
-    if optimizer == 'AdamW':
-        optimizer = torch.optim.AdamW(
-            sde.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay,
-        )
-    else:
-        raise ValueError()
-
-    # Scheduler
-    if scheduler == 'linear':
-        lr = lambda t: 1 - (t / epochs)
-    elif scheduler == 'cosine':
-        lr = lambda t: (1 + math.cos(math.pi * t / epochs)) / 2
-    elif scheduler == 'exponential':
-        lr = lambda t: math.exp(-7 * (t / epochs) ** 2)
-    else:
-        raise ValueError()
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr)
-
-    # Optional: make metrics use a common step in wandb
-    # (You can also do this in train(): wandb.define_metric("step"); wandb.define_metric("batch_loss/*", step_metric="step"))
-    global_step = 0
-    for epoch in (bar := trange(epochs, ncols=88)):
-        losses_train = []
-        losses_valid = []
-        # ---- Train ----
-        sde.train()
-        for b_idx, batch in enumerate(trainloader):            
-            x, _ = to(batch, device=device)
-            kwargs = {"c": generate_context(x)}
-            # LOGGING
-            if b_idx == 0 and epoch == 0:
-                wandb.log({
-                    "debug/x/mean_per_channel": x.detach().mean(dim=(0,2,3)).cpu().numpy(),
-                    "debug/x/std_per_channel":  x.detach().std (dim=(0,2,3)).cpu().numpy(),
-                    "debug/c/mean":             kwargs["c"].detach().mean().item(),
-                    "debug/c/std":              kwargs["c"].detach().std().item(),
-                }, commit=False)
-
-            l = sde.loss(x, **kwargs)
-            l.backward()
-            # LOGGING: gradient norms
-            gn = grad_global_norm(sde)
-            wandb.log({"grad_norm": gn, "epoch": epoch, "batch_idx": b_idx, "step": global_step}, step=global_step)
-    
-            optimizer.step()
-            optimizer.zero_grad()
-            losses_train.append(l.detach())
-            
-            # LOGGING: atch-wise logging (train)
-            if (b_idx % log_every_n) == 0:
-                wandb.log(
-                    {
-                        "batch_loss/train": l.item(),
-                        "lr": optimizer.param_groups[0]["lr"],
-                        "epoch": epoch,
-                        "batch_idx": b_idx,
-                        "step": global_step,  # record explicit step
-                    },
-                    step=global_step,
-                )
-            global_step += 1
-            
-        # ---- Valid ----
-        sde.eval()
-        with torch.no_grad():
-            for vb_idx, batch in enumerate(validloader):
-                x, _ = to(batch, device=device)
-                kwargs = {"c": generate_context(x)}
-                lv = sde.loss(x, **kwargs)
-                losses_valid.append(lv)
-                # Batch-wise logging (valid)
-                if (vb_idx % log_every_n) == 0:
-                    wandb.log(
-                        {
-                            "batch_loss/valid": lv.item(),
-                            "epoch": epoch,
-                            "batch_idx": vb_idx,
-                            "step": global_step,
-                        },
-                        step=global_step,
-                    )
-        # ---- Epoch stats ----
-        loss_train = torch.stack(losses_train).mean().item()
-        loss_valid = torch.stack(losses_valid).mean().item()
-        lr_now = optimizer.param_groups[0]['lr']
-
-        wandb.log(
-            {
-                "loss_train/epoch": loss_train,
-                "loss_valid/epoch": loss_valid,
-                "lr/epoch": lr_now,
-                "epoch": epoch,
-                "step": global_step,
-            },
-            step=global_step,
-        )
-        yield loss_train, loss_valid, lr_now
-
-        bar.set_postfix(lt=loss_train, lv=loss_valid, lr=lr_now)
-        scheduler.step()
-"""
 def loop(
     sde: VPSDE,
     trainset: Dataset,
@@ -252,7 +128,7 @@ def loop(
     num_workers: int = 20,
     log_every_n: int = 1,
     # EDM-style LR knobs (can live in cfg.training)
-    lr_rampup_kimg: float = 1000.0,  # warmup over 10k images
+    lr_rampup_kimg: float = 100.0,  # warmup over 10k images
     lr_decay: float = 0.999,       # exponential step-decay base
     images_per_item: int = 1,      # set to L if you want to count frames as images
     **absorb,
@@ -309,17 +185,14 @@ def loop(
                 # set images_per_item=L when calling loop(...)
                 nimg_this_step = x.size(0) * images_per_item
                 cur_nimg += nimg_this_step
-
                 # Warmup
                 ramp = min(cur_nimg / nimg_ramp, 1.0)
                 new_lr = lr_base * ramp
-
                 # Step-decay every 5e6 images (matches your snippet)
                 decay_steps = (cur_nimg - nimg_ramp) // 5e6 if cur_nimg > nimg_ramp else 0
                 if decay_steps > 0:
                     new_lr *= (lr_decay ** decay_steps)
-
-                for g in optimizer.param_groups:
+                for g in optimizer.param_groups: # type: ignore
                     g["lr"] = float(new_lr)
                 # Log LR by images seen (nice x-axis for W&B)
                 wandb.log({"lr": new_lr, "images_seen": cur_nimg, "step": global_step}, step=global_step)
@@ -339,18 +212,15 @@ def loop(
             # Grad norm logging
             gn = grad_global_norm(sde)
             wandb.log({"grad_norm": gn, "epoch": epoch, "batch_idx": b_idx, "step": global_step}, step=global_step)
-
-            optimizer.step()
-            optimizer.zero_grad()
-
+            optimizer.step() # type: ignore
+            optimizer.zero_grad() # type: ignore
             losses_train.append(l.detach())
-
             # Batch-wise logging (train)
             if (b_idx % log_every_n) == 0:
                 wandb.log(
                     {
                         "batch_loss/train": l.item(),
-                        "lr": optimizer.param_groups[0]["lr"],
+                        "lr": optimizer.param_groups[0]["lr"], # type: ignore
                         "epoch": epoch,
                         "batch_idx": b_idx,
                         "step": global_step,
@@ -394,6 +264,19 @@ def loop(
             },
             step=global_step,
         )
+        bar.set_description(f"Epoch {epoch+1}/{epochs} | Train Loss: {loss_train:.4f} | Valid Loss: {loss_valid:.4f} | LR: {lr_now:.6f}")
+        # ---- Checkpointing ----
+        if (epoch + 1) % 10 == 0:  # Save every 10 epochs (adjust as needed)
+            checkpoint = {
+                "epoch": epoch + 1,
+                "model_state_dict": sde.score.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(), # type: ignore
+                "global_step": global_step,
+                "loss_train": loss_train,
+                "loss_valid": loss_valid,
+                "lr": lr_now,
+            }
+            torch.save(checkpoint, f"checkpoint_epoch_{epoch+1}.pth")
 
         yield loss_train, loss_valid, lr_now
 

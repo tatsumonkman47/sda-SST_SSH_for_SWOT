@@ -4,17 +4,16 @@ import torch
 import numpy as np
 from typing import *
 
-from sda.score import *
-from sda.utils import *
-from utils import *
-
+from sda.score import VPSDE
+from sda.utils import save_config, loop
+from utils import make_score, draw
 
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig, OmegaConf
 import hydra
 from pathlib import Path as SysPath  # avoid shadowing Hydra's `Path`
 import sys
-sys.path.append('/home.ufs/tm3076/swot_SUM03/SWOT_project/SWOT-inpainting-DL/src')
+sys.path.append('/home/tm3076/scratch/project/SWOT-inpainting-DL/src')
 import claude_data_loaders
 
 wandb.login()
@@ -117,4 +116,4 @@ def train(cfg: DictConfig):
     run.finish()
 
 if __name__ == '__main__':
-    train()
+    train() # type: ignore

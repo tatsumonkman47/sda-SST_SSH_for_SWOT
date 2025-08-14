@@ -1,20 +1,28 @@
 r"""Quasi-geostrophic helpers"""
 
-import numpy as np
+import numpy as np # type: ignore
 import os
 import seaborn
 
-from einops import rearrange
-from numpy.typing import ArrayLike
+from einops import rearrange # type: ignore
+from numpy.typing import ArrayLike # type: ignore
 from pathlib import Path
-from PIL import Image
-from torch import Tensor
+from PIL import Image # type: ignore
+import torch
+from torch import Tensor # type: ignore
 from typing import *
 
-from sda.nn import *
-from sda.score import *
-from sda.utils import *
+from sda.nn import ResidualBlock, Checkpoint
+from sda.score import ScoreUNet
+from sda.utils import load_config
 
+import torch.nn as nn
+ACTIVATIONS = {
+    'relu': nn.ReLU,
+    'silu': nn.SiLU,
+    'gelu': nn.GELU,
+    # Add more as needed
+}
 
 if 'SCRATCH' in os.environ:
     SCRATCH = os.environ['SCRATCH']
@@ -106,7 +114,7 @@ class GlobalScoreUNet(ScoreUNet):
 
             tail.insert(0, Checkpoint(TemporalBlock(channels)))
 
-    def forward(
+    def forward( # type: ignore
         self,
         x: Tensor,  # (B, L, C, H, W)
         t: Tensor,  # (B) or ()
